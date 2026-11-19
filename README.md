@@ -1,6 +1,6 @@
 ﻿# any-downloader · 高速多并发下载器
 
-[![License: Unlicense](https://img.shields.io/badge/License-Unlicense-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](#)
 
@@ -590,8 +590,8 @@ docs/交接说明.md         交接说明：现状 / 已实锤结论 / 未验证
 
 ## 许可证
 
-本项目以 [Unlicense](LICENSE) 发布，已奉献至公有领域：任何人都可以为任何目的（含商业用途）
-自由使用、修改、分发、再授权，**无需署名、无需保留版权声明**。
+本项目以 [MIT License](LICENSE) 发布：可自由使用、修改、分发与商业使用，
+只需保留版权声明与许可声明。
 
 ## 相关链接
 
