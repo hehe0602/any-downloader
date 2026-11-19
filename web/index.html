@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>高速下载器</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="vendor/vue.global.prod.js"></script>
+</head>
+<body>
+  <div class="bg-orbs">
+    <span class="orb orb-1"></span>
+    <span class="orb orb-2"></span>
+    <span class="orb orb-3"></span>
+  </div>
+
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <div>
+          <h1>高速下载器</h1>
+          <p>多连接并发 · 动态分块 · 断点续传</p>
+        </div>
+      </div>
+      <button class="btn btn-primary" @click="toggleForm">
+        <span class="plus">+</span> 新建下载
+      </button>
+    </header>
+
+    <transition name="slide-fade">
+      <section class="glass form-card" v-if="showForm">
+        <div class="form-grid">
+          <label class="field field-full">
+            <span>下载链接</span>
+            <input v-model="form.url" @keydown.enter="submitForm"
+              placeholder="粘贴下载直链，或夸克分享链接 https://pan.quark.cn/s/…" spellcheck="false" />
+          </label>
+
+          <!-- 分享链接解析状态：未登录引导 / 提取码 / 文件列表 / 错误提示 -->
+          <div v-if="share.kind" class="field field-full share-panel" :class="'panel-' + share.kind">
+            <template v-if="share.kind === 'need_login'">
+              <div class="panel-head">
+                <span class="dot dot-warn"></span>
+                <span class="panel-title">{{ share.site_name }}未登录</span>
+                <button class="btn btn-soft btn-sm" type="button" @click="openShareLogin">
+                  重新打开登录窗口
+                </button>
+              </div>
+              <p class="panel-msg">{{ share.message }}</p>
+              <p v-if="share.note" class="panel-note">{{ share.note }}</p>
+              <div class="panel-actions">
+                <button class="btn btn-primary btn-sm" type="button"
+                  :disabled="share.resolving" @click="resolveLink">
+                  {{ share.resolving ? "正在解析…" : "我已登录，重新解析" }}
+                </button>
+              </div>
+            </template>
+
+            <template v-if="share.kind === 'passcode_required' || share.kind === 'passcode_wrong'">
+              <div class="panel-head">
+                <span class="dot" :class="share.kind === 'passcode_wrong' ? 'dot-warn' : 'dot-ok'"></span>
+                <span class="panel-title">分享需要提取码</span>
+              </div>
+              <p class="panel-msg" :class="{ 'msg-error': share.kind === 'passcode_wrong' }">
+                {{ share.message }}
+              </p>
+              <div class="input-row">
+                <input v-model="share.passcode" placeholder="输入提取码" maxlength="8"
+                  @keydown.enter="resolveLink" spellcheck="false" />
+                <button class="btn btn-primary btn-sm" type="button"
+                  :disabled="share.resolving" @click="resolveLink">
+                  {{ share.resolving ? "解析中…" : "确认解析" }}
+                </button>
+              </div>
+            </template>
+
+            <template v-if="share.kind === 'share'">
+              <div class="panel-head">
+                <span class="dot dot-ok"></span>
+                <span class="panel-title">{{ share.share_title || "分享文件" }}</span>
+                <span class="panel-meta">{{ share.site_name }} · 已选 {{ selectedCount }} 个</span>
+              </div>
+
+              <!-- 签发直链失败等原因（如转存空间不足）：留在面板上，别只闪一条 toast -->
+              <p class="panel-msg msg-error" v-if="share.message">{{ share.message }}</p>
+
+              <!-- 面包屑：点击任意一级返回 -->
+              <div class="crumbs">
+                <template v-for="(c, i) in share.crumbs" :key="c.fid">
+                  <a class="crumb" @click="goCrumb(i)">{{ c.name }}</a>
+                  <span class="crumb-sep" v-if="i < share.crumbs.length - 1">/</span>
+                </template>
+                <span class="dir-loading" v-if="share.dirLoading">正在加载…</span>
+              </div>
+
+              <!-- 全选当前目录 + 已选统计 -->
+              <div class="share-all">
+                <input type="checkbox" :checked="isAllCurrentSelected()"
+                  @change="toggleSelectAll" />
+                <span>全选当前目录</span>
+                <span class="selected-meta">
+                  已选 {{ selectedCount }} 个 · {{ formatBytes(selectedSize) }}
+                </span>
+              </div>
+
+              <div class="share-files" v-if="share.files.length">
+                <div class="share-file" v-for="f in share.files" :key="f.key"
+                  :class="{ 'is-dir': f.is_dir, checked: share.selected.indexOf(f.key) >= 0 }"
+                  @click="f.is_dir ? enterDir(f) : toggleFile(f)">
+                  <input v-if="!f.is_dir" type="checkbox"
+                    :checked="share.selected.indexOf(f.key) >= 0"
+                    @click.stop="toggleFile(f)" />
+                  <span v-if="f.is_dir" class="file-ico">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round">
+                      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    </svg>
+                  </span>
+                  <span class="file-name" :title="f.name">{{ f.name }}</span>
+                  <span class="file-size" v-if="!f.is_dir">{{ formatBytes(f.size) }}</span>
+                  <span class="file-size dir-tag" v-else>进入文件夹 ›</span>
+                </div>
+              </div>
+              <p class="panel-note" v-else-if="!share.dirLoading">这个文件夹是空的</p>
+              <p v-for="note in share.notes" :key="note" class="panel-note">{{ note }}</p>
+            </template>
+
+            <template v-if="share.kind === 'error'">
+              <div class="panel-head">
+                <span class="dot dot-warn"></span>
+                <span class="panel-title">解析失败</span>
+              </div>
+              <p class="panel-msg msg-error">{{ share.message }}</p>
+            </template>
+          </div>
+
+          <label class="field">
+            <span>保存目录</span>
+            <div class="input-row">
+              <input v-model="form.saveDir" placeholder="选择保存目录" />
+              <button class="btn btn-soft" @click="browseFolder" type="button">浏览</button>
+            </div>
+            <p class="field-hint" v-if="settings.save_dir">目录已记住，下次启动自动填入</p>
+          </label>
+          <label class="field">
+            <span>文件名（可选）</span>
+            <input v-model="form.filename" placeholder="留空则自动获取" />
+          </label>
+          <label class="field">
+            <span>并发数：{{ form.concurrency }}</span>
+            <input type="range" min="8" max="256" step="8" v-model.number="form.concurrency" />
+          </label>
+          <label class="field">
+            <span>分块大小</span>
+            <select v-model.number="form.chunkSize">
+              <option :value="2">2 MB</option>
+              <option :value="3">3 MB</option>
+              <option :value="4">4 MB</option>
+              <option :value="5">5 MB</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+          <span>高级选项（会话凭据 / cURL 导入 / UA / Referer / HTTP2）</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
+               :class="['chevron', { rotated: showAdvanced }]">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </div>
+        <transition name="expand">
+          <div class="form-grid advanced" v-if="showAdvanced">
+            <div class="field field-full session-box">
+              <span>浏览器会话凭据（推荐：登录一次，之后免手工 cURL）</span>
+              <div class="input-row">
+                <select v-model="form.sessionSite" @change="refreshSession">
+                  <option v-for="s in sessionSites" :key="s.key" :value="s.key">{{ s.name }}</option>
+                </select>
+                <button class="btn btn-soft" @click="openSession" type="button">打开网盘登录</button>
+                <button class="btn btn-soft" @click="captureSession" type="button">读取会话凭据</button>
+                <button class="btn btn-soft" @click="diagnoseLink" type="button">诊断直链</button>
+              </div>
+              <p class="field-hint" :class="session.logged_in ? 'hint-ok' : 'hint-warn'">
+                <span class="dot" :class="session.logged_in ? 'dot-ok' : 'dot-warn'"></span>{{ sessionHint }}
+              </p>
+            </div>
+            <div class="field field-full">
+              <span>浏览器 cURL 一键导入（自动填充 URL / UA / Referer / Cookie）</span>
+              <textarea v-model="form.curlText" rows="3" spellcheck="false"
+                placeholder="DevTools → Network → 下载请求右键 → Copy → Copy as cURL，整段粘贴后点“解析并填充”"></textarea>
+              <div class="input-row">
+                <button class="btn btn-soft" @click="parseCurl" type="button">解析并填充</button>
+              </div>
+              <p class="field-hint" v-if="Object.keys(form.extraHeaders).length">
+                已载入 {{ Object.keys(form.extraHeaders).length }} 个额外请求头，提交时随请求发送
+              </p>
+            </div>
+            <label class="field field-full">
+              <span>User-Agent</span>
+              <input v-model="form.userAgent" placeholder="留空使用默认浏览器 UA" />
+            </label>
+            <label class="field">
+              <span>Referer</span>
+              <input v-model="form.referer" placeholder="如 https://pan.quark.cn/" />
+            </label>
+            <label class="field">
+              <span>Cookie</span>
+              <input v-model="form.cookie" placeholder="需要登录时粘贴" />
+            </label>
+            <label class="field field-inline">
+              <span>HTTP/2 多路复用（默认关闭，可能降低并发效果）</span>
+              <input type="checkbox" v-model="form.useHttp2" />
+            </label>
+            <label class="field field-inline">
+              <span>优先 IPv4（部分 CDN 的 IPv6 路径被限速，换条路就快了；SNI/证书仍按域名校验）</span>
+              <input type="checkbox" v-model="form.preferIpv4" />
+            </label>
+            <label class="field field-inline">
+              <span>并发自适应（低并发起步，按实测速度自己找最优并发数）</span>
+              <input type="checkbox" v-model="form.adaptiveConcurrency" />
+            </label>
+          </div>
+        </transition>
+
+        <div class="form-actions">
+          <button class="btn btn-soft" @click="showForm = false" type="button">取消</button>
+          <button class="btn btn-primary" @click="submitForm" type="button">开始下载</button>
+        </div>
+      </section>
+    </transition>
+
+    <section class="task-list">
+      <transition-group name="task">
+        <article class="glass task-card" v-for="t in taskList" :key="t.id">
+          <div class="task-head">
+            <div class="file-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                <path d="M14 2v6h6" />
+              </svg>
+            </div>
+            <div class="task-title">
+              <h3 :title="t.filename">{{ t.filename || t.url }}</h3>
+              <p class="host">{{ hostOf(t.url) }}</p>
+            </div>
+            <span class="badge" :class="'badge-' + t.status">{{ statusText(t.status) }}</span>
+          </div>
+
+          <p class="error-line" v-if="t.error">{{ t.error }}</p>
+          <p class="field-hint" v-if="t.resume_note">{{ t.resume_note }}</p>
+          <p class="field-hint" v-if="t.transport_note">{{ t.transport_note }}</p>
+          <p class="field-hint" v-if="t.adapt_note">{{ t.adapt_note }}</p>
+
+          <div class="diag-panel" v-if="diags[t.id]">
+            <div class="diag-chips">
+              <span v-for="c in diags[t.id].combos" :key="c.label" class="diag-chip"
+                    :class="c.status === 206 || c.status === 200 ? 'diag-ok' : 'diag-bad'">
+                {{ comboText(c.label) }} · {{ c.status || 'ERR' }}
+              </span>
+            </div>
+            <div class="diag-chips" v-if="diags[t.id].transports && diags[t.id].transports.length">
+              <span v-for="r in diags[t.id].transports" :key="'tr-' + r.name" class="diag-chip"
+                    :class="r.status === 206 || r.status === 200 ? 'diag-ok' : 'diag-bad'">
+                {{ trName(r.name) }} · {{ r.status || 'ERR' }}
+              </span>
+            </div>
+            <p class="diag-verdict">{{ diags[t.id].verdict }}</p>
+            <p class="diag-verdict diag-deep" v-if="diags[t.id].deepVerdict">
+              {{ diags[t.id].deepVerdict }}
+            </p>
+            <p class="field-hint" v-if="diags[t.id].curlBackend">
+              TLS 后端：{{ diags[t.id].curlBackend }}
+            </p>
+          </div>
+
+          <div class="progress-wrap">
+            <div class="progress-bar">
+              <div class="progress-fill" :style="{ width: t.percent + '%' }">
+                <span class="shimmer"></span>
+              </div>
+            </div>
+            <span class="percent">{{ Number(t.percent || 0).toFixed(1) }}%</span>
+          </div>
+
+          <div class="chunk-grid" v-if="t.chunk_count">
+            <span v-for="i in visibleCells(t)" :key="i" class="cell"
+                  :class="cellClass(t, i)"></span>
+            <span class="grid-more" v-if="t.chunk_count > maxCells">
+              其余 {{ t.chunk_count - maxCells }} 块…
+            </span>
+          </div>
+
+          <div class="task-stats">
+            <div class="stat">
+              <span class="stat-label">已下载</span>
+              <span>{{ formatBytes(t.done_bytes) }} / {{ formatBytes(t.total_size) }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">速度（近 1 分钟）</span>
+              <span>{{ speedText(t) }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">剩余时间</span>
+              <span>{{ etaText(t) }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">分块</span>
+              <span>{{ t.chunks_done }}/{{ t.chunk_count }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">并发</span>
+              <span>{{ concText(t) }}</span>
+            </div>
+          </div>
+
+          <div class="task-actions">
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="t.status === 'downloading' || t.status === 'connecting' || t.status === 'queued'"
+                    @click="pause(t)">暂停</button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="t.status === 'paused'" @click="resume(t)">继续</button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="t.status === 'error' || t.status === 'canceled'"
+                    @click="resume(t)">重试</button>
+            <span class="conc-edit" v-if="t.status !== 'completed'">
+              <input type="number" min="1" max="256" step="1"
+                     v-model.number="t._concInput" title="改并发数（下载中立即生效）" />
+              <button class="btn btn-soft btn-sm" type="button"
+                      @click="applyConcurrency(t)">改并发</button>
+            </span>
+            <button class="btn btn-soft btn-sm" type="button"
+                    :disabled="diagBusy[t.id]" @click="diagnoseTask(t)">
+              {{ diagBusy[t.id] ? '诊断中…' : '诊断' }}
+            </button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    :disabled="diagBusy[t.id]" @click="deepDiagnose(t)">
+              {{ diagBusy[t.id] ? '诊断中…' : '深度诊断' }}
+            </button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="diags[t.id] && diags[t.id].best"
+                    @click="applyFix(t)">按此修正并重试</button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="diags[t.id] && diags[t.id].suggestTransport && t.transport !== diags[t.id].suggestTransport"
+                    @click="retryWithTransport(t)">改用 Chrome 指纹重试</button>
+            <button class="btn btn-soft btn-sm" type="button"
+                    v-if="t.status !== 'completed'" @click="cancel(t)">停止</button>
+            <button class="btn btn-soft btn-sm" type="button" @click="openFolder(t)">打开目录</button>
+            <button class="btn btn-danger btn-sm" type="button" @click="remove(t)">移除</button>
+          </div>
+        </article>
+      </transition-group>
+
+      <div class="empty" v-if="!taskList.length">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" width="52" height="52" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 21h14" />
+          </svg>
+        </div>
+        <h3>还没有下载任务</h3>
+        <p>点击右上角「新建下载」，粘贴网盘直链即可开始</p>
+      </div>
+    </section>
+
+    <transition name="toast">
+      <div class="toast" v-if="toast" :class="toast.type">{{ toast.message }}</div>
+    </transition>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

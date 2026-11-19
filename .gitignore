@@ -1,0 +1,20 @@
+# WebView2 运行时用户数据（含 cookie/登录态，禁止上传）
+会话数据/
+
+# 运行时产物
+下载/
+backup/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# 本地状态与私人设置（含绝对路径，运行时变化）
+tasks_state.json
+app_settings.json
+
+# 系统与编辑器
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
